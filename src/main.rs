@@ -218,8 +218,7 @@ fn run_selector(path: &PathBuf) {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_always_on_top()
-            .with_window_type(egui::X11WindowType::Dialog)
+            .with_decorations(true)
             .with_inner_size([500.0, 350.0]),
         ..Default::default()
     };
