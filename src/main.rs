@@ -1,3 +1,4 @@
+mod cache;
 mod crypto;
 mod data;
 
@@ -119,18 +120,33 @@ fn init_mode(path: &PathBuf) {
     println!("Example entries added. Use --edit to customize.");
 }
 
+enum DecryptResult {
+    WithKey([u8; 32], Vec<u8>),
+    WithPassword(String, Vec<u8>),
+}
+
 fn edit_mode(path: &PathBuf) {
     let encrypted = std::fs::read(path).unwrap_or_else(|e| {
         eprintln!("Failed to read {}: {}", path.display(), e);
         std::process::exit(1);
     });
 
-    let password = rpassword::prompt_password("Master password: ").unwrap();
+    let decrypt_result = if let Some(cached_key) = cache::try_cached_key() {
+        match crypto::decrypt_with_key(&encrypted, &cached_key) {
+            Ok(d) => DecryptResult::WithKey(cached_key, d),
+            Err(_) => {
+                cache::clear_cache();
+                decrypt_with_password(&encrypted)
+            }
+        }
+    } else {
+        decrypt_with_password(&encrypted)
+    };
 
-    let decrypted = crypto::decrypt(&encrypted, &password).unwrap_or_else(|e| {
-        eprintln!("{}", e);
-        std::process::exit(1);
-    });
+    let (decrypted, cached_key) = match &decrypt_result {
+        DecryptResult::WithKey(k, d) => (d.clone(), Some(*k)),
+        DecryptResult::WithPassword(_, d) => (d.clone(), None),
+    };
 
     let temp_file = std::env::temp_dir().join("passlock_edit.json");
     std::fs::write(&temp_file, &decrypted).unwrap();
@@ -157,7 +173,18 @@ fn edit_mode(path: &PathBuf) {
         match data::deserialize(&edited) {
             Ok(_) => {
                 std::fs::remove_file(&temp_file).ok();
-                let re_encrypted = crypto::encrypt(&edited, &password).unwrap();
+                let re_encrypted = match (&decrypt_result, cached_key) {
+                    (DecryptResult::WithKey(key, _), _) => {
+                        crypto::encrypt_with_key(&edited, key, &encrypted).unwrap()
+                    }
+                    (DecryptResult::WithPassword(pw, _), Some(key)) => {
+                        cache::cache_key(&key).ok();
+                        crypto::encrypt(&edited, pw).unwrap()
+                    }
+                    (DecryptResult::WithPassword(pw, _), None) => {
+                        crypto::encrypt(&edited, pw).unwrap()
+                    }
+                };
                 std::fs::write(path, re_encrypted).unwrap();
                 println!("Saved: {}", path.display());
                 break;
@@ -171,6 +198,16 @@ fn edit_mode(path: &PathBuf) {
             }
         }
     }
+}
+
+fn decrypt_with_password(encrypted: &[u8]) -> DecryptResult {
+    let pw = rpassword::prompt_password("Master password: ").unwrap();
+    let (d, key) = crypto::decrypt_and_derive(encrypted, &pw).unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    });
+    cache::cache_key(&key).ok();
+    DecryptResult::WithPassword(pw, d)
 }
 
 fn run_selector(path: &PathBuf) {
@@ -227,7 +264,7 @@ struct App {
 
 impl App {
     fn new(encrypted_data: Vec<u8>) -> Self {
-        Self {
+        let mut app = Self {
             state: AppState::Locked,
             encrypted_data,
             master_password: String::new(),
@@ -240,17 +277,33 @@ impl App {
             selected_account: None,
             status_message: None,
             copied_fields: HashSet::new(),
+        };
+        app.try_cached_unlock();
+        app
+    }
+
+    fn try_cached_unlock(&mut self) {
+        if let Some(cached_key) = cache::try_cached_key() {
+            if let Ok(decrypted) = crypto::decrypt_with_key(&self.encrypted_data, &cached_key) {
+                if let Ok(store) = data::deserialize(&decrypted) {
+                    self.store = Some(store);
+                    self.state = AppState::Unlocked;
+                }
+            } else {
+                cache::clear_cache();
+            }
         }
     }
 
     fn try_unlock(&mut self) {
-        match crypto::decrypt(&self.encrypted_data, &self.master_password) {
-            Ok(decrypted) => match data::deserialize(&decrypted) {
+        match crypto::decrypt_and_derive(&self.encrypted_data, &self.master_password) {
+            Ok((decrypted, derived_key)) => match data::deserialize(&decrypted) {
                 Ok(store) => {
                     self.store = Some(store);
                     self.state = AppState::Unlocked;
                     self.unlock_error = None;
                     self.master_password.clear();
+                    cache::cache_key(&derived_key).ok();
                 }
                 Err(e) => {
                     self.unlock_error = Some(format!("Invalid data: {}", e));
@@ -366,7 +419,17 @@ impl App {
             match self.level {
                 Level::Site => {
                     self.selected_site = Some(name.clone());
-                    self.level = Level::Account;
+
+                    let store = self.store.as_ref().unwrap();
+                    let accounts = store.get(name).unwrap();
+
+                    if accounts.len() == 1 && accounts[0].name == "default" {
+                        self.selected_account = Some("default".to_string());
+                        self.level = Level::Field;
+                    } else {
+                        self.level = Level::Account;
+                    }
+
                     self.search.clear();
                     self.selected_index = 0;
                 }
@@ -393,8 +456,18 @@ impl App {
                 self.selected_index = 0;
             }
             Level::Field => {
-                self.level = Level::Account;
-                self.selected_account = None;
+                let store = self.store.as_ref().unwrap();
+                let site = self.selected_site.as_ref().unwrap();
+                let accounts = store.get(site).unwrap();
+
+                if accounts.len() == 1 && accounts[0].name == "default" {
+                    self.level = Level::Site;
+                    self.selected_site = None;
+                    self.selected_account = None;
+                } else {
+                    self.level = Level::Account;
+                    self.selected_account = None;
+                }
                 self.search.clear();
                 self.selected_index = 0;
             }
@@ -566,7 +639,7 @@ impl App {
                         egui::Color32::TRANSPARENT
                     };
 
-                    egui::Frame::NONE
+                    let response = egui::Frame::NONE
                         .fill(bg_color)
                         .inner_margin(egui::Margin::symmetric(8, 4))
                         .corner_radius(4.0)
@@ -588,7 +661,12 @@ impl App {
                                     },
                                 );
                             });
-                        });
+                        })
+                        .response;
+
+                    if is_selected {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
                 }
 
                 if entries.is_empty() {
