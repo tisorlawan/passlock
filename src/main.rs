@@ -257,6 +257,7 @@ struct App {
     selected_account: Option<String>,
     status_message: Option<(String, std::time::Instant)>,
     copied_fields: HashSet<(String, String, String)>,
+    scroll_to_selected: bool,
 }
 
 impl App {
@@ -274,6 +275,7 @@ impl App {
             selected_account: None,
             status_message: None,
             copied_fields: HashSet::new(),
+            scroll_to_selected: false,
         };
         app.try_cached_unlock();
         app
@@ -371,6 +373,13 @@ impl App {
         }
     }
 
+    fn find_index_by_name(&self, name: &str) -> usize {
+        self.current_entries()
+            .iter()
+            .position(|(n, _)| n == name)
+            .unwrap_or(0)
+    }
+
     fn get_selected_field_value(&self) -> Option<String> {
         if self.level != Level::Field {
             return None;
@@ -447,10 +456,14 @@ impl App {
         match self.level {
             Level::Site => std::process::exit(0),
             Level::Account => {
+                let site = self.selected_site.clone();
                 self.level = Level::Site;
                 self.selected_site = None;
                 self.search.clear();
-                self.selected_index = 0;
+                if let Some(name) = site {
+                    self.selected_index = self.find_index_by_name(&name);
+                }
+                self.scroll_to_selected = true;
             }
             Level::Field => {
                 let store = self.store.as_ref().unwrap();
@@ -458,15 +471,24 @@ impl App {
                 let accounts = store.get(site).unwrap();
 
                 if accounts.len() == 1 && accounts[0].name == "default" {
+                    let site = self.selected_site.clone();
                     self.level = Level::Site;
                     self.selected_site = None;
                     self.selected_account = None;
+                    self.search.clear();
+                    if let Some(name) = site {
+                        self.selected_index = self.find_index_by_name(&name);
+                    }
                 } else {
+                    let account = self.selected_account.clone();
                     self.level = Level::Account;
                     self.selected_account = None;
+                    self.search.clear();
+                    if let Some(name) = account {
+                        self.selected_index = self.find_index_by_name(&name);
+                    }
                 }
-                self.search.clear();
-                self.selected_index = 0;
+                self.scroll_to_selected = true;
             }
         }
     }
@@ -558,6 +580,7 @@ impl App {
             {
                 if entry_count > 0 {
                     self.selected_index = (self.selected_index + 1) % entry_count;
+                    self.scroll_to_selected = true;
                 }
             }
             if i.key_pressed(egui::Key::ArrowUp)
@@ -568,6 +591,7 @@ impl App {
                         .selected_index
                         .checked_sub(1)
                         .unwrap_or(entry_count - 1);
+                    self.scroll_to_selected = true;
                 }
             }
             if i.key_pressed(egui::Key::Enter) {
@@ -661,8 +685,11 @@ impl App {
                         })
                         .response;
 
-                    if is_selected {
-                        response.scroll_to_me(Some(egui::Align::Center));
+                    if is_selected && self.scroll_to_selected {
+                        response.scroll_to_me_animation(
+                            Some(egui::Align::Center),
+                            egui::style::ScrollAnimation::none(),
+                        );
                     }
                 }
 
@@ -676,6 +703,8 @@ impl App {
                     });
                 }
             });
+
+            self.scroll_to_selected = false;
 
             if self.level == Level::Field {
                 ui.add_space(4.0);

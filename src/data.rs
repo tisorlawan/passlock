@@ -1,23 +1,23 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-pub type PasswordStore = HashMap<String, Vec<Account>>;
+pub type PasswordStore = IndexMap<String, Vec<Account>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     pub name: String,
-    pub fields: HashMap<String, String>,
+    pub fields: IndexMap<String, String>,
 }
 
 pub fn example_store() -> PasswordStore {
-    let mut store = HashMap::new();
+    let mut store = IndexMap::new();
 
     store.insert(
         "github.com".to_string(),
         vec![
             Account {
                 name: "work".to_string(),
-                fields: HashMap::from([
+                fields: IndexMap::from([
                     ("username".to_string(), "work-user".to_string()),
                     ("password".to_string(), "work-pass".to_string()),
                     ("api_token".to_string(), "ghp_work123".to_string()),
@@ -25,7 +25,7 @@ pub fn example_store() -> PasswordStore {
             },
             Account {
                 name: "personal".to_string(),
-                fields: HashMap::from([
+                fields: IndexMap::from([
                     ("username".to_string(), "personal-user".to_string()),
                     ("password".to_string(), "personal-pass".to_string()),
                 ]),
@@ -37,7 +37,7 @@ pub fn example_store() -> PasswordStore {
         "aws".to_string(),
         vec![Account {
             name: "prod".to_string(),
-            fields: HashMap::from([
+            fields: IndexMap::from([
                 ("access_key".to_string(), "AKIAIOSFODNN7EXAMPLE".to_string()),
                 (
                     "secret_key".to_string(),
