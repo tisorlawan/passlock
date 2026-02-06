@@ -354,8 +354,7 @@ impl App {
                 let account_name = self.selected_account.as_ref().unwrap();
                 let accounts = store.get(site).unwrap();
                 let account = accounts.iter().find(|a| &a.name == account_name).unwrap();
-                let mut fields: Vec<_> = account.fields.keys().cloned().collect();
-                fields.sort();
+                let fields: Vec<_> = account.fields.keys().cloned().collect();
                 fields
                     .into_iter()
                     .filter(|f| search_lower.is_empty() || f.to_lowercase().contains(&search_lower))

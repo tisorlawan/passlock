@@ -1,6 +1,6 @@
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
 };
 use argon2::Argon2;
 use rand::RngCore;

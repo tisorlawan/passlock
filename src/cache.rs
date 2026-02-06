@@ -7,8 +7,8 @@
 //! - Both files required to recover key; either missing = re-auth
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
 };
 use rand::RngCore;
 use std::fs;
