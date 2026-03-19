@@ -8,11 +8,14 @@ use data::PasswordStore;
 use eframe::egui;
 use md5::{Digest, Md5};
 use std::collections::HashSet;
+use std::env;
 use std::path::PathBuf;
 use std::process::Command;
+use std::process::ExitCode;
 use std::time::Duration;
 
 const CLEAR_DELAY_SECS: u64 = 60;
+const REEXEC_GUARD: &str = "__PASSLOCK_CLEAN_ENV_DONE";
 
 #[derive(Parser)]
 #[command(name = "passlock")]
@@ -31,12 +34,63 @@ struct Cli {
     clear_later: Option<Vec<String>>,
 }
 
-fn main() {
+fn main() -> ExitCode {
+    if env::var_os(REEXEC_GUARD).is_none() {
+        let exe = match env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("current_exe failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let mut cmd = Command::new(exe);
+        cmd.args(env::args_os().skip(1));
+
+        cmd.env(REEXEC_GUARD, "1");
+
+        cmd.env_remove("LD_LIBRARY_PATH");
+        cmd.env_remove("LIBGL_DRIVERS_PATH");
+        cmd.env_remove("__EGL_VENDOR_LIBRARY_FILENAMES");
+        cmd.env_remove("GBM_BACKENDS_PATH");
+
+        let status = match cmd.status() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("re-exec failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+
+            if let Some(sig) = status.signal() {
+                eprintln!("child terminated by signal {sig}");
+                return ExitCode::FAILURE;
+            }
+        }
+
+        return ExitCode::from(status.code().unwrap_or(1) as u8);
+    }
+
+    real_main()
+}
+
+fn real_main() -> ExitCode {
     let cli = Cli::parse();
 
     if let Some(args) = cli.clear_later {
         clear_later_mode(&args[0], &args[1]);
-        return;
+        return ExitCode::FAILURE;
+    }
+
+    unsafe {
+        std::env::remove_var("LD_LIBRARY_PATH");
+        std::env::remove_var("LIBGL_DRIVERS_PATH");
+        std::env::remove_var("__EGL_VENDOR_LIBRARY_FILENAMES");
+        std::env::remove_var("GBM_BACKENDS_PATH");
     }
 
     let file = cli
@@ -50,15 +104,16 @@ fn main() {
 
     if cli.init {
         init_mode(&file);
-        return;
+        return ExitCode::SUCCESS;
     }
 
     if cli.edit {
         edit_mode(&file);
-        return;
+        return ExitCode::SUCCESS;
     }
 
     run_selector(&file);
+    return ExitCode::SUCCESS;
 }
 
 fn clear_later_mode(hash: &str, value: &str) {
